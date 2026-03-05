@@ -1,0 +1,17 @@
+# Training outputs and logs
+output/
+runs/
+*.tfevents*
+events.out.tfevents.*
+
+# Checkpoints and large artifacts
+*.pth
+*.ply
+*.npz
+
+# Python caches
+__pycache__/
+*.pyc
+
+# Common temporary caches
+mast3r_cache/

@@ -1,0 +1,1 @@
+Namespace(sh_degree=3, source_path='D:\\3D-GS DATA\\MVGS\\360_v2\\stump', model_path='benchmark_360v2_ours_sfc_frs_greedy_K48\\stump', images='images', train_view_list='benchmark_360v2_ours_sfc_frs_greedy_K48\\stump\\selected_views.json', resolution=-1, white_background=True, data_device='cpu', eval=True)

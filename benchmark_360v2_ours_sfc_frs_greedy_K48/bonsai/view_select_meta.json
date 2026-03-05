@@ -1,0 +1,13 @@
+{
+  "coverage": 0.55458,
+  "num_selected": 48,
+  "num_points_used": 50000,
+  "strategy": "sfc_frs_greedy",
+  "alpha": 1.0,
+  "beta": 0.5,
+  "gamma": 0.2,
+  "delta": 0.1,
+  "N": 255,
+  "K": 48,
+  "elapsed_seconds": 31.74
+}
