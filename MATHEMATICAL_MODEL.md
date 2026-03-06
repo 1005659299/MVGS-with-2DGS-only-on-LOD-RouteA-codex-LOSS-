@@ -12,7 +12,7 @@
 1. [Overview](#1-overview)
 2. [Gaussian Primitive Representation (2D-GS Surfel)](#2-gaussian-primitive-representation-2d-gs-surfel)
 3. [LOD Hybrid Rendering Pipeline](#3-lod-hybrid-rendering-pipeline)
-4. [Deterministic Stochastic Sampling](#4-deterministic-stochastic-sampling)
+4. [Reproducible Stochastic Sampling](#4-reproducible-stochastic-sampling)
 5. [Loss Function Formulation](#5-loss-function-formulation)
 6. [Sparse-View Adaptive Densification](#6-sparse-view-adaptive-densification)
 7. [Route A: SFC-FRS++ View Selection](#7-route-a-sfc-frs-view-selection)
@@ -182,7 +182,7 @@ From the allmap the following are derived:
 
 ---
 
-## 4. Deterministic Stochastic Sampling
+## 4. Reproducible Stochastic Sampling
 
 ### 4.1 Problem (Baseline)
 
@@ -194,8 +194,8 @@ non-reproducibility causes:
 
 ### 4.2 Solution (This Repo)
 
-A deterministic PRNG seeds the transition-zone mask from the camera identity
-and the training iteration:
+A reproducible PRNG seeds the transition-zone mask from the camera identity
+and the training iteration using a linear congruential formula:
 
 ```
 seed(cam, t) = (FIXED_SEED + uid(cam) · PRIME + t · STRIDE)  mod  2³¹
@@ -203,12 +203,16 @@ seed(cam, t) = (FIXED_SEED + uid(cam) · PRIME + t · STRIDE)  mod  2³¹
 
 Constants:
 - FIXED_SEED = 0
-- PRIME = 1,000,003 (large prime for decorrelation)
+- PRIME = 1,000,003 (large prime for decorrelation between cameras)
 - STRIDE = 9,176 (co-prime to common iteration counts)
 
 A per-call `torch.Generator` is created on the device with this seed, ensuring
 bitwise identical masks for the same (camera, iteration) pair across runs while
 remaining uniformly distributed across different pairs.
+
+> Note: The codebase also contains an FNV-1a hash utility (`_stable_string_hash`)
+> for deterministic string-based hashing, but the actual camera seed derivation
+> uses the linear formula above with integer UIDs.
 
 ### 4.3 Mathematical Guarantee
 
@@ -397,7 +401,7 @@ where:
 | Term | Formula | Meaning |
 |---|---|---|
 | **C_cov** (Coverage) | \|⋃_{k∈S} V_k\| / \|P\| | Fraction of 3D points visible from at least one selected view |
-| **C_base** (Baseline) | max_{j∈S} B(k,j) | Triangulation quality: E[sin²(φ)] over shared points |
+| **C_base** (Baseline) | max_{j∈S} B(k,j) | Best triangulation angle with any selected view; B(k,j) = E[sin²(φ)] over shared points |
 | **C_info** (Information) | I(k) / max(I) | Inverse-depth weighted information density |
 | **C_overlap** (Overlap) | max_{j∈S} J(V_k, V_j) | Jaccard similarity of visibility sets (penalised) |
 
@@ -499,7 +503,7 @@ intrinsics.
 
 | Aspect | Baseline (Inverse-Depth) | This Repo (RouteA-codex-LOSS) |
 |---|---|---|
-| Transition-zone RNG | `torch.rand_like(depths)` — non-deterministic, different each call | **Deterministic** per-(camera, iteration) seed via FNV-1a hash |
+| Transition-zone RNG | `torch.rand_like(depths)` — non-deterministic, different each call | **Reproducible** per-(camera, iteration) seed via linear congruential formula |
 | render() signature | No `rng_step` parameter | Accepts `rng_step=iteration` for seed derivation |
 | Far-cascade empty fallback | `torch.zeros(3, H, W)` | **`bg_color[:, None, None].expand(3, H, W)`** — correct background |
 
@@ -554,7 +558,7 @@ through diversity-aware selection.
 | `train_view_list` | — | `""` (path to selected_views.json) |
 | `densify_sparse_gamma` | — | `0.5` |
 | `normal_guided_densify` | — | `0` (disabled by default) |
-| Default output path | `./output/` | `<repo>/output/` (relative to source tree) |
+| Default output path | `./output/` | `${REPO_ROOT}/output/` (relative to repository root) |
 
 ### 9.6 Scene Loading (scene/__init__.py, dataset_readers.py)
 
