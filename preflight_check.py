@@ -111,7 +111,7 @@ def check_cuda_version() -> bool:
 def check_torch() -> bool:
     """Check PyTorch and its CUDA support."""
     try:
-        import torch  # noqa: F811
+        import torch
     except ImportError:
         print(f"  PyTorch        : not installed  {FAIL}")
         return False
