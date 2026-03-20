@@ -1,0 +1,21 @@
+# Conda environment for MVGS-RouteA-codex-LOSS on Ada Lovelace GPUs
+# (RTX 4090 / RTX 6000 PRO / L20 / L40) and newer (Hopper/Blackwell)
+# Requires CUDA 12.1+ driver installed on the host.
+name: mvgs
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - pytorch=2.1.2
+  - torchvision=0.16.2
+  - torchaudio=2.1.2
+  - pytorch-cuda=12.1
+  - plyfile
+  - tqdm
+  - pip:
+    - submodules/diff-gaussian-rasterization
+    - submodules/simple-knn
