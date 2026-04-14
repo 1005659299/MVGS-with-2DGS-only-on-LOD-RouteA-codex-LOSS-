@@ -176,6 +176,12 @@ def readColmapSceneInfo(path, images, eval, llffhold=8, *, args):
                 meta = json.load(f)
             if "coverage" in meta:
                 print(f"[ViewSelect] Coverage: {meta['coverage']:.4f} (from cached meta)")
+    if getattr(args, "vf_support_pack", ""):
+        if os.path.exists(args.vf_support_pack):
+            pack = np.load(args.vf_support_pack, allow_pickle=True)
+            pack_selected = set(pack["selected_view_names"].tolist())
+            current_selected = {c.image_name for c in train_cam_infos}
+            assert current_selected == pack_selected, "selected train views do not match vf_support_pack"
 
     # ---- Normalization: use FULL train set (pre-selection) for stable scale ----
     if eval:

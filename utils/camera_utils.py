@@ -9,17 +9,52 @@
 # For inquiries contact  george.drettakis@inria.fr
 #
 
-from scene.cameras import Camera
+import os
+
 import numpy as np
+import torch
+from PIL import Image
+from kornia import create_meshgrid
+
+from scene.cameras import Camera
 from utils.general_utils import PILtoTorch
 from utils.graphics_utils import fov2focal
-from kornia import create_meshgrid
-import torch
 
 def pix2ndc(v, S):
     return (v * 2.0 + 1.0) / S - 1.0
 
 WARNED = False
+
+
+def load_mask_by_image_name(root, image_name, resolution):
+    if not root:
+        return None
+    for ext in (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".npy"):
+        path = os.path.join(root, image_name + ext)
+        if not os.path.exists(path):
+            continue
+        if ext == ".npy":
+            arr = np.load(path)
+            mask = Image.fromarray((arr > 0).astype(np.uint8) * 255)
+        else:
+            mask = Image.open(path).convert("L")
+        resized = PILtoTorch(mask, resolution)
+        return (resized[:1, ...] > 0.5).float()
+    return None
+
+
+def build_edge_safe_mask(width, height, edge_margin_px, static_mask=None, camera_mask=None):
+    yy, xx = torch.meshgrid(torch.arange(height), torch.arange(width), indexing="ij")
+    d_edge = torch.minimum(
+        torch.minimum(xx, width - 1 - xx),
+        torch.minimum(yy, height - 1 - yy),
+    ).float()
+    edge_safe = (d_edge >= float(edge_margin_px)).float().unsqueeze(0)
+    if static_mask is not None:
+        edge_safe = edge_safe * static_mask.float()
+    if camera_mask is not None:
+        edge_safe = edge_safe * camera_mask.float()
+    return edge_safe
 
 def loadCam(args, id, cam_info, resolution_scale):
     orig_w, orig_h = cam_info.image.size
@@ -47,14 +82,41 @@ def loadCam(args, id, cam_info, resolution_scale):
 
     gt_image = resized_image_rgb[:3, ...]
     loaded_mask = None
+    vf_static_mask = None
+    vf_camera_mask = None
+    vf_edge_safe_mask = None
 
     if resized_image_rgb.shape[1] == 4:
         loaded_mask = resized_image_rgb[3:4, ...]
 
+    if getattr(args, "vf_mask_path", ""):
+        vf_static_mask = load_mask_by_image_name(
+            args.vf_mask_path,
+            cam_info.image_name,
+            resolution,
+        )
+    if getattr(args, "vf_camera_mask_path", ""):
+        vf_camera_mask = load_mask_by_image_name(
+            args.vf_camera_mask_path,
+            cam_info.image_name,
+            resolution,
+        )
+    vf_edge_safe_mask = build_edge_safe_mask(
+        width=resolution[0],
+        height=resolution[1],
+        edge_margin_px=getattr(args, "vf_edge_margin_px", 15),
+        static_mask=vf_static_mask,
+        camera_mask=vf_camera_mask,
+    )
+
     return Camera(colmap_id=cam_info.uid, R=cam_info.R, T=cam_info.T, 
                   FoVx=cam_info.FovX, FoVy=cam_info.FovY, 
                   image=gt_image, gt_alpha_mask=loaded_mask,
-                  image_name=cam_info.image_name, uid=id, data_device=args.data_device)
+                  image_name=cam_info.image_name, uid=id,
+                  vf_static_mask=vf_static_mask,
+                  vf_camera_mask=vf_camera_mask,
+                  vf_edge_safe_mask=vf_edge_safe_mask,
+                  data_device=args.data_device)
 
 def cameraList_from_camInfos(cam_infos, resolution_scale, args):
     camera_list = []

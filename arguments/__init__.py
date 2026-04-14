@@ -9,7 +9,7 @@
 # For inquiries contact  george.drettakis@inria.fr
 #
 
-from argparse import ArgumentParser, Namespace
+from argparse import ArgumentParser, Namespace, BooleanOptionalAction
 import sys
 import os
 
@@ -28,12 +28,12 @@ class ParamGroup:
             value = value if not fill_none else None 
             if shorthand:
                 if t == bool:
-                    group.add_argument("--" + key, ("-" + key[0:1]), default=value, action="store_true")
+                    group.add_argument("--" + key, ("-" + key[0:1]), default=value, action=BooleanOptionalAction)
                 else:
                     group.add_argument("--" + key, ("-" + key[0:1]), default=value, type=t)
             else:
                 if t == bool:
-                    group.add_argument("--" + key, default=value, action="store_true")
+                    group.add_argument("--" + key, default=value, action=BooleanOptionalAction)
                 else:
                     group.add_argument("--" + key, default=value, type=t)
 
@@ -52,6 +52,10 @@ class ModelParams(ParamGroup):
         self._images = "images"
         # Route A: train-view selection (offline only)
         self.train_view_list = ""               # path to selected_views.json from offline script
+        self.vf_support_pack = ""
+        self.vf_mask_path = ""
+        self.vf_camera_mask_path = ""
+        self.vf_edge_margin_px = 15
         self._resolution = -1
         self._white_background = False
         self.data_device = "cuda"
@@ -101,7 +105,16 @@ class OptimizationParams(ParamGroup):
         self.lambda_dist = 1000.0  # weight of depth distortion loss
         # Sparse-view compensation
         self.densify_sparse_gamma = 0.5      # (K/N_ref)^gamma
-        self.normal_guided_densify = 0       # 0/1
+        self.normal_guided_densify = False
+        self.vf_enable_densify_guard = False
+        self.vf_enable_prior = False
+        self.vf_enable_shadow_guard = False
+        self.vf_schedule_branch = "Q"
+        self.prior_type = "none"
+        self.lambda_depth_local_max = 0.05
+        self.prior_t_on = 3500
+        self.prior_t_full = 7000
+        self.tau_comp_alpha = 0.05
         super().__init__(parser, "Optimization Parameters")
 
 def get_combined_args(parser : ArgumentParser):

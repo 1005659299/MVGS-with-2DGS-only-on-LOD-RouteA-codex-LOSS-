@@ -355,20 +355,65 @@ class GaussianModel:
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
 
-    def densify_and_split(self, grads, grad_threshold, scene_extent, N=2):
+    def _pad_guard_tensor(self, tensor, n_init_points, fill_value):
+        if tensor is None:
+            return None
+        if tensor.shape[0] >= n_init_points:
+            return tensor[:n_init_points]
+        pad_shape = (n_init_points - tensor.shape[0],) + tensor.shape[1:]
+        pad = torch.full(pad_shape, fill_value, dtype=tensor.dtype, device=tensor.device)
+        return torch.cat([tensor, pad], dim=0)
+
+    def _points_in_box3ds(self, box3ds):
+        mask = torch.zeros_like(self.get_xyz[:, 0], dtype=torch.bool)
+        for box3d in box3ds:
+            x_min_3d, y_min_3d, z_min_3d, x_max_3d, y_max_3d, z_max_3d = box3d
+            mask_xyz = (
+                (self.get_xyz[:, 0] > x_min_3d)
+                & (self.get_xyz[:, 0] < x_max_3d)
+                & (self.get_xyz[:, 1] > y_min_3d)
+                & (self.get_xyz[:, 1] < y_max_3d)
+                & (self.get_xyz[:, 2] > z_min_3d)
+                & (self.get_xyz[:, 2] < z_max_3d)
+            )
+            mask = torch.logical_or(mask, mask_xyz)
+        return mask
+
+    def densify_and_split(
+        self,
+        grads,
+        grad_threshold,
+        scene_extent,
+        N=2,
+        *,
+        split_allow=None,
+        tau_split=None,
+        big_screen_force_split=None,
+    ):
         """[2D-GS] Modified densify_and_split to handle 2D scaling"""
         n_init_points = self.get_xyz.shape[0]
-        # Extract points that satisfy the gradient condition
         padded_grad = torch.zeros((n_init_points), device="cuda")
         padded_grad[:grads.shape[0]] = grads.squeeze()
-        selected_pts_mask = torch.where(padded_grad >= grad_threshold, True, False)
+        split_allow = self._pad_guard_tensor(split_allow, n_init_points, True)
+        tau_split = self._pad_guard_tensor(tau_split, n_init_points, float(grad_threshold))
+        big_screen_force_split = self._pad_guard_tensor(big_screen_force_split, n_init_points, False)
+        if split_allow is None:
+            split_allow = torch.ones((n_init_points,), dtype=torch.bool, device="cuda")
+        if tau_split is None:
+            tau_split = torch.full((n_init_points,), float(grad_threshold), dtype=torch.float32, device="cuda")
+        if big_screen_force_split is None:
+            big_screen_force_split = torch.zeros((n_init_points,), dtype=torch.bool, device="cuda")
+        split_grad_ok = padded_grad >= tau_split
+        selected_pts_mask = split_allow & split_grad_ok
         selected_pts_mask = torch.logical_and(
             selected_pts_mask,
             torch.max(self.get_scaling, dim=1).values > self.percent_dense * scene_extent
         )
+        selected_pts_mask = selected_pts_mask | (split_allow & big_screen_force_split)
+        if not torch.any(selected_pts_mask):
+            return selected_pts_mask
 
         stds = self.get_scaling[selected_pts_mask].repeat(N, 1)
-        # [2D-GS] Pad third dimension with 0 for torch.normal (requires 3D std)
         stds = torch.cat([stds, 0 * torch.ones_like(stds[:, :1])], dim=-1)
         means = torch.zeros_like(stds)
         samples = torch.normal(mean=means, std=stds)
@@ -384,28 +429,41 @@ class GaussianModel:
 
         prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
         self.prune_points(prune_filter)
+        return selected_pts_mask
 
-    def densify_and_clone(self, grads, grad_threshold, scene_extent, box3ds):
-
-        # Extract points that satisfy the gradient condition
-        mask = torch.zeros_like(self.get_xyz[:,0])
-        for box3d in box3ds:
-            x_min_3d, y_min_3d, z_min_3d, x_max_3d, y_max_3d, z_max_3d = box3d
-            mask_x = torch.logical_and(self.get_xyz[:, 0] > x_min_3d, self.get_xyz[:, 0] < x_max_3d)
-            mask_y = torch.logical_and(self.get_xyz[:, 1] > y_min_3d, self.get_xyz[:, 1] < y_max_3d)
-            mask_z = torch.logical_and(self.get_xyz[:, 2] > z_min_3d, self.get_xyz[:, 2] < z_max_3d)
-            mask_xyz = torch.logical_and(mask_x, mask_y)
-            mask_xyz = torch.logical_and(mask_xyz, mask_z)
-
-            mask = torch.logical_or(mask, mask_xyz)
-
-
-
-        selected_pts_mask = torch.where(torch.norm(grads, dim=-1) >= grad_threshold, True, False)
-        selected_pts_mask = torch.logical_and(selected_pts_mask,
-                                              torch.max(self.get_scaling, dim=1).values <= self.percent_dense*scene_extent)
-
-        selected_pts_mask = torch.logical_or(selected_pts_mask, mask)
+    def densify_and_clone(
+        self,
+        grads,
+        grad_threshold,
+        scene_extent,
+        box3ds,
+        *,
+        clone_allow=None,
+        tau_clone=None,
+        box_bonus_mask=None,
+    ):
+        n_init_points = self.get_xyz.shape[0]
+        clone_allow = self._pad_guard_tensor(clone_allow, n_init_points, True)
+        tau_clone = self._pad_guard_tensor(tau_clone, n_init_points, float(grad_threshold))
+        if clone_allow is None:
+            clone_allow = torch.ones((n_init_points,), dtype=torch.bool, device="cuda")
+        if tau_clone is None:
+            tau_clone = torch.full((n_init_points,), float(grad_threshold), dtype=torch.float32, device="cuda")
+        if box_bonus_mask is None:
+            box_bonus_mask = self._points_in_box3ds(box3ds) if box3ds else torch.zeros((n_init_points,), dtype=torch.bool, device="cuda")
+        else:
+            box_bonus_mask = self._pad_guard_tensor(box_bonus_mask, n_init_points, False)
+        grad_norm = torch.norm(grads, dim=-1)
+        clone_grad_ok = grad_norm >= tau_clone[:grad_norm.shape[0]]
+        clone_grad_ok = self._pad_guard_tensor(clone_grad_ok, n_init_points, False)
+        selected_pts_mask = clone_allow & clone_grad_ok
+        selected_pts_mask = torch.logical_and(
+            selected_pts_mask,
+            torch.max(self.get_scaling, dim=1).values <= self.percent_dense * scene_extent,
+        )
+        selected_pts_mask = selected_pts_mask | (clone_allow & box_bonus_mask)
+        if not torch.any(selected_pts_mask):
+            return selected_pts_mask
         new_xyz = self._xyz[selected_pts_mask]
         new_features_dc = self._features_dc[selected_pts_mask]
         new_features_rest = self._features_rest[selected_pts_mask]
@@ -414,6 +472,7 @@ class GaussianModel:
         new_rotation = self._rotation[selected_pts_mask]
 
         self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation)
+        return selected_pts_mask
 
 
     def gather_rays(self, rays, region):
@@ -453,14 +512,26 @@ class GaussianModel:
         return intersection_point
 
 
-    def densify_and_prune(self, max_grad, min_opacity, extent, max_screen_size, cams, boxes):
+    def densify_and_prune(
+        self,
+        max_grad,
+        min_opacity,
+        extent,
+        max_screen_size,
+        cams,
+        boxes,
+        *,
+        densify_guard=None,
+    ):
         grads = self.xyz_gradient_accum / self.denom
         grads[grads.isnan()] = 0.0
 
         box3ds = []
         if cams is not None:
+            assert len(cams) == len(boxes), "cams/boxes length mismatch"
             for i, cam_0 in enumerate(cams):
-                for j, cam_1 in enumerate(cams[i+1:]):
+                for off, cam_1 in enumerate(cams[i+1:]):
+                    j = i + 1 + off
                     ray0_o = cam_0.rayo
                     ray0_d = cam_0.rayd
                     box0 = boxes[i]
@@ -516,11 +587,34 @@ class GaussianModel:
 
                     box3d = [x_min_3d, y_min_3d, z_min_3d, x_max_3d, y_max_3d, z_max_3d]
                     box3ds.append(box3d)
+        if densify_guard is None:
+            clone_allow = split_allow = tau_clone = tau_split = None
+            box_bonus_mask = big_screen_force_split = None
+        else:
+            clone_allow = densify_guard.clone_allow
+            split_allow = densify_guard.split_allow
+            tau_clone = densify_guard.tau_clone
+            tau_split = densify_guard.tau_split
+            box_bonus_mask = densify_guard.box_bonus_mask
+            big_screen_force_split = densify_guard.big_screen_force_split
 
-
-
-        self.densify_and_clone(grads, max_grad, extent, box3ds)
-        self.densify_and_split(grads, max_grad, extent)
+        clone_mask = self.densify_and_clone(
+            grads,
+            max_grad,
+            extent,
+            box3ds,
+            clone_allow=clone_allow,
+            tau_clone=tau_clone,
+            box_bonus_mask=box_bonus_mask,
+        )
+        split_mask = self.densify_and_split(
+            grads,
+            max_grad,
+            extent,
+            split_allow=split_allow,
+            tau_split=tau_split,
+            big_screen_force_split=big_screen_force_split,
+        )
 
         prune_mask = (self.get_opacity < min_opacity).squeeze()
         if max_screen_size:
@@ -530,6 +624,11 @@ class GaussianModel:
         self.prune_points(prune_mask)
 
         torch.cuda.empty_cache()
+        return {
+            "clone_mask": clone_mask,
+            "split_mask": split_mask,
+            "prune_mask": prune_mask,
+        }
 
     def add_densification_stats(self, viewspace_point_tensor, update_filter):
         self.xyz_gradient_accum[update_filter] += torch.norm(viewspace_point_tensor.grad[update_filter,:2], dim=-1, keepdim=True)
